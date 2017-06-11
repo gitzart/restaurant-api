@@ -1,12 +1,35 @@
 # import json
 
-from flask import Flask, request
+from flask import Flask, request, jsonify, abort
+from flask_httpauth import HTTPBasicAuth
 # from mongoengine.base import BaseDocument
 # from bson import json_util
+
 from findARestaurant import findARestaurant
-from models import Restaurant
+from models import User, Restaurant
 
 app = Flask(__name__)
+auth = HTTPBasicAuth()
+
+
+@auth.verify_password
+def verify_pw(username, password):
+    user = User.objects(name=username).first()
+    return user and user.verify(password)
+
+
+@app.route('/users', methods=['POST'])
+def signup():
+    username = request.form.get('username')
+    password = request.form.get('password')
+    if username is None or password is None:
+        abort(400)
+    if User.objects(name=username):
+        abort(400)
+    user = User(name=username)
+    user.hash_password(password)
+    user.save()
+    return jsonify(User=user.name), 201
 
 
 # class MongoEncoder(json.JSONEncoder):
@@ -23,6 +46,7 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET', 'POST'])
 @app.route('/restaurants', methods=['GET', 'POST'])
+@auth.login_required
 def restaurants():
     if request.method == 'GET':
         # restaurants = Restaurant.objects  # (id='59368a24756a44140214809e')
@@ -43,6 +67,7 @@ def restaurants():
 
 
 @app.route('/restaurants/<id>', methods=['GET', 'PUT', 'DELETE'])
+@auth.login_required
 def restaurants_with_id(id):
     if request.method == 'GET':
         return Restaurant.objects(id=id).to_json()
