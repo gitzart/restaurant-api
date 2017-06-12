@@ -1,6 +1,6 @@
 # import json
 
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, g
 from flask_httpauth import HTTPBasicAuth
 # from mongoengine.base import BaseDocument
 # from bson import json_util
@@ -13,9 +13,22 @@ auth = HTTPBasicAuth()
 
 
 @auth.verify_password
-def verify_pw(username, password):
-    user = User.objects(name=username).first()
-    return user and user.verify(password)
+def verify_pw(username_or_token, password):
+    user_id = User.verify_token(username_or_token)
+    if user_id:
+        user = User.objects(id=user_id).first()
+    else:
+        user = User.objects(name=username_or_token).first()
+        if not user or not user.verify(password):
+            return False
+    g.user = user
+    return True
+
+
+@app.route('/token')
+@auth.login_required
+def get_token():
+    return jsonify(token=g.user.generate_token().decode())
 
 
 @app.route('/users', methods=['POST'])

@@ -1,5 +1,6 @@
 import base64
 import unittest
+import time
 
 from flask_testing import TestCase
 
@@ -9,6 +10,7 @@ from models import db, db_name
 
 base_url = 'http://localhost:5000'
 user_url = base_url + '/users'
+token_url = base_url + '/token'
 restaurant_url = base_url + '/restaurants'
 specific_restaurant_url = base_url + '/restaurants/'
 credentials = 'Basic ' + base64.b64encode(b'nut:althebest').decode('ascii')
@@ -43,6 +45,7 @@ class BaseTest(TestCase):
         pass
 
     def tearDown(self):
+        # pass
         try:
             db.drop_database(db_name)
         except Exception as err:
@@ -56,6 +59,28 @@ class RestaurantTests(BaseTest):
             print(resp.json)
             self.assertEqual(resp.status_code, 201)
 
+    def test_user_can_get_new_token(self):
+        self.client.post(user_url, data=user_data[0])
+        resp = self.client.get(token_url,
+                               headers={'Authorization': credentials})
+        print(resp.json)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue('token' in resp.json)
+
+    def test_user_can_add_restaurants_with_token(self):
+        self.client.post(user_url, data=user_data[0])
+        token = self.client.get(token_url,
+                                headers={'Authorization': credentials})
+        token = 'Basic {}'.format(
+            base64.b64encode((token.json['token'] + ':pw').encode()).decode()
+        )
+        print('------', token)
+        for i in restaurant_data[:2]:
+            resp = self.client.post(restaurant_url, data=i,
+                                    headers={'Authorization': token})
+            print(resp.json)
+            self.assertEqual(resp.status_code, 200)
+
     def test_user_can_add_restaurants(self):
         self.client.post(user_url, data=user_data[0])
         for i in restaurant_data:
@@ -63,6 +88,22 @@ class RestaurantTests(BaseTest):
                                     headers={'Authorization': credentials})
             print(resp.json)
             self.assertEqual(resp.status_code, 200)
+
+    def test_user_can_read_restaurants_with_token(self):
+        self.client.post(user_url, data=user_data[0])
+        token = self.client.get(token_url,
+                                headers={'Authorization': credentials})
+        token = 'Basic {}'.format(
+            base64.b64encode((token.json['token'] + ':pw').encode()).decode()
+        )
+        for i in restaurant_data[:2]:
+            self.client.post(restaurant_url, data=i,
+                             headers={'Authorization': token})
+        resp = self.client.get(restaurant_url,
+                               headers={'Authorization': token})
+        print('--------', resp.json)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.json), 2)
 
     def test_user_can_read_restaurants(self):
         self.client.post(user_url, data=user_data[0])
@@ -75,6 +116,20 @@ class RestaurantTests(BaseTest):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.json), 2)
 
+    def test_user_cant_read_restaurants_with_invalid_token(self):
+        self.client.post(user_url, data=user_data[0])
+        token = self.client.get(token_url,
+                                headers={'Authorization': credentials})
+        invalid_token = 'Basic {}'.format(
+            base64.b64encode((token.json['token'] + 'xx:pw').encode()).decode()
+        )
+        for i in restaurant_data[:2]:
+            self.client.post(restaurant_url, data=i,
+                             headers={'Authorization': token})
+        resp = self.client.get(restaurant_url,
+                               headers={'Authorization': invalid_token})
+        self.assertEqual(resp.status_code, 401)
+
     def test_user_cant_read_restaurants_with_invalid_credentials(self):
         self.client.post(user_url, data=user_data[0])
         for i in restaurant_data[:2]:
@@ -82,6 +137,21 @@ class RestaurantTests(BaseTest):
                              headers={'Authorization': credentials})
         resp = self.client.get(restaurant_url,
                                headers={'Authorization': invalid_credentials})
+        self.assertEqual(resp.status_code, 401)
+
+    def test_user_cant_read_restaurants_with_expired_token(self):
+        self.client.post(user_url, data=user_data[0])
+        token = self.client.get(token_url,
+                                headers={'Authorization': credentials})
+        token = 'Basic {}'.format(
+            base64.b64encode((token.json['token'] + ':pw').encode()).decode()
+        )
+        for i in restaurant_data[:2]:
+            self.client.post(restaurant_url, data=i,
+                             headers={'Authorization': token})
+        time.sleep(35)
+        resp = self.client.get(restaurant_url,
+                               headers={'Authorization': token})
         self.assertEqual(resp.status_code, 401)
 
     def test_user_can_read_specific_restaurant(self):
