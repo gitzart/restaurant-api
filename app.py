@@ -1,7 +1,11 @@
 # import json
+import time
+
+from functools import wraps
 
 from flask import Flask, request, jsonify, abort, g
 from flask_httpauth import HTTPBasicAuth
+from redis import StrictRedis
 # from mongoengine.base import BaseDocument
 # from bson import json_util
 
@@ -10,6 +14,60 @@ from models import User, Restaurant
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
+redis = StrictRedis()
+
+
+class RateLimit:
+    expiration_window = 10
+
+    def __init__(self, key_prefix, limit, per, send_x_headers):
+        self.reset = (int(time.time()) // per) * per + per
+        self.key = key_prefix + str(self.reset)
+        self.limit = limit
+        self.per = per
+        self.send_x_headers = send_x_headers
+        p = redis.pipeline()
+        p.incr(self.key)
+        p.expireat(self.key, self.reset + self.expiration_window)
+        self.current = min(p.execute()[0], limit)
+
+    remaining = property(lambda x: x.limit - x.current)
+    over_limit = property(lambda x: x.current >= x.limit)
+
+
+def get_view_rate_limit():
+    return getattr(g, '_view_rate_limit', None)
+
+
+def on_over_limit(limit):
+    return jsonify(data='You hit the rate limit', error='429'), 429
+
+
+def rate_limit(limit, per=60, send_x_headers=True, over_limit=on_over_limit,
+               scope_func=lambda: request.remote_addr,
+               key_func=lambda: request.endpoint):
+    def decorator(f):
+        @wraps(f)
+        def rate_limited(*args, **kwargs):
+            key = 'rate-limit/{}/{}/'.format(key_func(), scope_func())
+            rlimit = RateLimit(key, limit, per, send_x_headers)
+            g._view_rate_limit = rlimit
+            if over_limit is not None and rlimit.over_limit:
+                return over_limit(rlimit)
+            return f(*args, **kwargs)
+        return rate_limited
+    return decorator
+
+
+@app.after_request
+def inject_x_rate_headers(response):
+    limit = get_view_rate_limit()
+    if limit and limit.send_x_headers:
+        h = response.headers
+        h.add('X-RateLimit-Remaining', str(limit.remaining))
+        h.add('X-RateLimit-Limit', str(limit.limit))
+        h.add('X-RateLimit-Reset', str(limit.reset))
+    return response
 
 
 @auth.verify_password
@@ -60,6 +118,7 @@ def signup():
 @app.route('/', methods=['GET', 'POST'])
 @app.route('/restaurants', methods=['GET', 'POST'])
 @auth.login_required
+@rate_limit(limit=300)
 def restaurants():
     if request.method == 'GET':
         # restaurants = Restaurant.objects  # (id='59368a24756a44140214809e')
@@ -81,6 +140,7 @@ def restaurants():
 
 @app.route('/restaurants/<id>', methods=['GET', 'PUT', 'DELETE'])
 @auth.login_required
+@rate_limit(limit=300)
 def restaurants_with_id(id):
     if request.method == 'GET':
         return Restaurant.objects(id=id).to_json()

@@ -1,10 +1,10 @@
 import base64
-import unittest
 import time
+import unittest
 
 from flask_testing import TestCase
 
-from app import app
+from app import app, redis
 from models import db, db_name
 
 
@@ -48,6 +48,7 @@ class BaseTest(TestCase):
         # pass
         try:
             db.drop_database(db_name)
+            redis.flushdb()
         except Exception as err:
             print('-------', err.args)
 
@@ -197,6 +198,46 @@ class RestaurantTests(BaseTest):
                                headers={'Authorization': credentials})
         print('------', len(restaurant_data[1:3]) - 1)
         self.assertEqual(len(resp.json), len(restaurant_data[1:3]) - 1)
+
+    def test_rate_limit_with_password_authentication(self):
+        request_rate = 10
+        requests = 0
+        self.client.post(user_url, data=user_data[0])
+        for i in restaurant_data[1:3]:
+            resp = self.client.post(restaurant_url, data=i,
+                                    headers={'Authorization': credentials})
+            requests += 1
+        while requests < request_rate:
+            resp = self.client.get(restaurant_url,
+                                   headers={'Authorization': credentials})
+            print(resp.json)
+            self.assertEqual(resp.status_code, 200)
+            requests += 1
+            print('-------number of requests: ', requests)
+
+    def test_rate_limit_error_with_token_authentication(self):
+        request_rate = 301
+        requests = 0
+        self.client.post(user_url, data=user_data[0])
+        token = self.client.get(token_url,
+                                headers={'Authorization': credentials})
+        token = 'Basic {}'.format(
+            base64.b64encode((token.json['token'] + ':pw').encode()).decode()
+        )
+        for i in restaurant_data[3:]:
+            resp = self.client.post(restaurant_url, data=i,
+                                    headers={'Authorization': token})
+            requests += 1
+        while requests < request_rate:
+            resp = self.client.get(restaurant_url,
+                                   headers={'Authorization': token})
+            print(resp.json)
+            if isinstance(resp.json, dict) and resp.json.get('error'):
+                self.assertEqual(resp.status_code, 429)
+            else:
+                self.assertEqual(resp.status_code, 200)
+            requests += 1
+            print('-------number of requests: ', requests)
 
 
 if __name__ == '__main__':
